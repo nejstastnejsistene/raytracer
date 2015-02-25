@@ -17,10 +17,22 @@ data Ray = Ray
     , rayDirection :: Vector
     } deriving (Show)
 
-data Shape = Plane Ray
-           | Triangle Vector Vector Vector
+data Shape = Shape
+    { shapeMaterial :: Material
+    , shapeGeometry :: Geometry
+    }
 
-data Scene = Scene [Shape]
+data Material = Material
+    { materialColor :: Pixel
+    }
+
+data Geometry = Plane Ray
+              | Triangle Vector Vector Vector
+
+data Scene = Scene
+    { sceneBackground :: Pixel
+    , sceneShapes     :: [Shape]
+    }
 
 data Camera = Camera
             { cameraPointOfView  :: Ray
@@ -43,8 +55,8 @@ normalize v = v ^/ magnitude v
 evaluateRay :: Ray -> Float -> Vector
 evaluateRay (Ray origin direction) t = origin ^+^ direction ^* t
 
--- Calculate where along the ray (if at all) it intersects the shape.
-intersect :: Shape -> Ray -> Maybe Float
+-- Calculate where along the ray (if at all) it intersects a shape.
+intersect :: Geometry -> Ray -> Maybe Float
 intersect (Plane (Ray off n)) (Ray p v) = if hit then Just t else Nothing
   where
     cos = v <.> n
@@ -53,10 +65,12 @@ intersect (Plane (Ray off n)) (Ray p v) = if hit then Just t else Nothing
 --intersect (Triangle p1 p2 p3) r@(Ray p v) = case intersect (Plane normal) r of
 --    Nothing -> Nothing
 --    Just t -> -- check if inside barycentric coordinates
-    
+
+-- shading = ambient ^+^ diffuse ^+^ specular
 
 traceRay :: Scene -> Ray -> Pixel
-traceRay (Scene [shape@(Plane (Ray _ n))]) r = maybe (135,206,235) (const (125,171,37)) (intersect shape r)
+traceRay (Scene bg [Shape (Material color) geo]) r = pixel
+  where pixel = maybe bg (const color) (intersect geo r)
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
 castRay :: Camera -> (Integer,Integer) -> Ray
@@ -96,7 +110,12 @@ main :: IO ()
 main = renderImage "out.ppm" scene camera
   where
     -- A plane that functions as the floor of the scene.
-    scene = Scene [Plane (Ray (0,0,-1) $ normalize (0,1,1))]
+    shape = Shape material plane
+    material = Material (125,171,37)
+    plane = Plane $ Ray (0,0,-1) $ normalize (0,1,1)
+    scene = Scene { sceneBackground = (135,206,235)
+                  , sceneShapes     = [shape]
+                  }
     -- Camera POV is behind the YZ-plane, with the Z-axis as up.
     camera = Camera { cameraPointOfView  = Ray (-1,0,0) (1,0,0)
                     , cameraUpDirection  = (0,0,1)
