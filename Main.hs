@@ -27,6 +27,7 @@ data Camera = Camera
             , cameraUpDirection  :: Vector
             , cameraFocalLength  :: Float
             , cameraViewPortSize :: (Float,Float)
+            , cameraResolution   :: (Integer,Integer)
             }
 
 type Pixel = (Word8,Word8,Word8)
@@ -55,11 +56,11 @@ intersect (Plane (Ray off n)) (Ray p v) = if hit then Just t else Nothing
     
 
 traceRay :: Scene -> Ray -> Pixel
-traceRay (Scene [shape@(Plane (Ray _ n))]) r = maybe (0,0,0) (const (0,255,0)) (intersect shape r)
+traceRay (Scene [shape@(Plane (Ray _ n))]) r = maybe (135,206,235) (const (125,171,37)) (intersect shape r)
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
-castRay :: Camera -> (Integer,Integer) -> (Integer,Integer) -> Ray
-castRay (Camera pov@(Ray p v) up fl (vw,vh)) (x,y) (imgW,imgH) = ray
+castRay :: Camera -> (Integer,Integer) -> Ray
+castRay (Camera pov@(Ray p v) up fl (vw,vh) (imgW,imgH)) (x,y) = ray
   where
     -- Center of view port.
     center = evaluateRay pov fl
@@ -77,22 +78,29 @@ castRay (Camera pov@(Ray p v) up fl (vw,vh)) (x,y) (imgW,imgH) = ray
     ray = Ray p $ normalize (p' ^-^ p)
 
 -- Render a scene from a camera into an array of pixels.
-renderScene :: Scene -> Camera -> (Integer,Integer) -> [Pixel]
-renderScene scene camera imgSize@(w,h) = do
+renderScene :: Scene -> Camera -> [Pixel]
+renderScene scene camera = do
+    let (w,h) = cameraResolution camera
     y <- [0..h-1]
     x <- [0..w-1]
-    return $ traceRay scene $ castRay camera (x,y) imgSize
+    return $ traceRay scene $ castRay camera (x,y)
+
+-- Output a scene from a camera into a ppm file.
+renderImage :: String -> Scene -> Camera -> IO ()
+renderImage path scene camera = writePPM path imgSize pixelData
+  where
+    imgSize = cameraResolution camera
+    pixelData = renderScene scene camera
 
 main :: IO ()
-main = writePPM "out.ppm" imgSize (renderScene scene camera imgSize)
+main = renderImage "out.ppm" scene camera
   where
     -- A plane that functions as the floor of the scene.
-    scene = Scene [Plane (Ray (0,0,-1) (0,0,1))]
+    scene = Scene [Plane (Ray (0,0,-1) $ normalize (0,1,1))]
     -- Camera POV is behind the YZ-plane, with the Z-axis as up.
     camera = Camera { cameraPointOfView  = Ray (-1,0,0) (1,0,0)
                     , cameraUpDirection  = (0,0,1)
                     , cameraFocalLength  = 1
-                    , cameraViewPortSize = (2, 2)
+                    , cameraViewPortSize = (2,2)
+                    , cameraResolution   = (200,200)
                     }
-    -- Size of the image in pixels.
-    imgSize = (200,200)

@@ -20,7 +20,7 @@ executable raytracer
   main-is:             Main.hs
   -- other-modules:       
   -- other-extensions:    
-  build-depends:       base         >=4.6 && <4.7
+  build-depends:       base         >=4.6 && <4.8
                      , vector-space >=0.9 && <1.0
                      , AC-PPM       >=1.1 && <1.2
   -- hs-source-dirs:      
