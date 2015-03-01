@@ -1,6 +1,9 @@
 import Codec.PPM
 import Data.AdditiveGroup
 import Data.Cross
+import Data.List (sortBy)
+import Data.Maybe
+import Data.Ord
 import Data.VectorSpace
 import Data.Word
 
@@ -23,11 +26,19 @@ data Shape = Shape
     }
 
 data Material = Material
-    { materialColor :: Pixel
+    { materialColor   :: Pixel
+    , materialOpacity :: Float
     }
 
 data Geometry = Plane Ray
               | Triangle Vector Vector Vector
+
+data Intersection = Intersection
+    { intersectionRay   :: Ray
+    , intersectionTime  :: Float
+    , intersectionShape :: Shape
+    }
+
 
 data Scene = Scene
     { sceneBackground :: Pixel
@@ -56,21 +67,27 @@ evaluateRay :: Ray -> Float -> Vector
 evaluateRay (Ray origin direction) t = origin ^+^ direction ^* t
 
 -- Calculate where along the ray (if at all) it intersects a shape.
-intersect :: Geometry -> Ray -> Maybe Float
-intersect (Plane (Ray off n)) (Ray p v) = if hit then Just t else Nothing
-  where
-    cos = v <.> n
-    t = ((off ^-^ p) <.> n) / cos
-    hit = abs cos > epsilon && t > -epsilon
---intersect (Triangle p1 p2 p3) r@(Ray p v) = case intersect (Plane normal) r of
---    Nothing -> Nothing
---    Just t -> -- check if inside barycentric coordinates
-
--- shading = ambient ^+^ diffuse ^+^ specular
+intersect :: Ray -> Shape -> Maybe Intersection
+intersect (Ray p v) s@(Shape m geo) = case geo of
+    Plane r@(Ray off n) -> case hit of
+        True -> Just (Intersection r t s)
+        False -> Nothing
+      where
+        cos = v <.> n
+        t = ((off ^-^ p) <.> n) / cos
+        hit = abs cos > epsilon && t > -epsilon
+    Triangle p1 p2 p3 -> undefined
 
 traceRay :: Scene -> Ray -> Pixel
-traceRay (Scene bg [Shape (Material color) geo]) r = pixel
-  where pixel = maybe bg (const color) (intersect geo r)
+traceRay (Scene bg shapes) r@(Ray p v) = pixel
+  where
+    intersections = mapMaybe (intersect r) shapes
+    sorted = sortBy (comparing intersectionTime) intersections
+    -- use nearest for now
+    nearest = case sorted of
+        [] -> Nothing
+        (x:_) -> Just (intersectionShape x)
+    pixel = maybe bg (materialColor . shapeMaterial) nearest
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
 castRay :: Camera -> (Integer,Integer) -> Ray
@@ -111,10 +128,13 @@ main = renderImage "out.ppm" scene camera
   where
     -- A plane that functions as the floor of the scene.
     shape = Shape material plane
-    material = Material (125,171,37)
-    plane = Plane $ Ray (0,0,-1) $ normalize (0,1,1)
-    scene = Scene { sceneBackground = (135,206,235)
-                  , sceneShapes     = [shape]
+    material = Material (125,171,37) 0.5
+    plane = Plane $ Ray (0,-1,0) $ normalize (0,1,0)
+    shape' = Shape material' plane'
+    material' = Material (135,206,235) 0.5
+    plane' = Plane $ Ray (0,0,-1) $ normalize (0,0,1)
+    scene = Scene { sceneBackground = (0,0,0)
+                  , sceneShapes     = [shape, shape']
                   }
     -- Camera POV is behind the YZ-plane, with the Z-axis as up.
     camera = Camera { cameraPointOfView  = Ray (-1,0,0) (1,0,0)
