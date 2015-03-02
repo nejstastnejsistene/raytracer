@@ -53,7 +53,7 @@ data Camera = Camera
             , cameraResolution   :: (Integer,Integer)
             }
 
-type Pixel = (Word8,Word8,Word8)
+type Pixel = Vector
 
 type PixelCoord = (Integer,Integer)
 type CanvasSize = (Integer,Integer)
@@ -78,16 +78,25 @@ intersect (Ray p v) s@(Shape m geo) = case geo of
         hit = abs cos > epsilon && t > -epsilon
     Triangle p1 p2 p3 -> undefined
 
+normalVector :: Geometry -> Vector
+normalVector (Plane n) = rayDirection n
+normalVector (Triangle p1 p2 p3) = undefined
+
 traceRay :: Scene -> Ray -> Pixel
-traceRay (Scene bg shapes) r@(Ray p v) = pixel
+traceRay s@(Scene bg shapes) r@(Ray p v) = pixel
   where
     intersections = mapMaybe (intersect r) shapes
     sorted = sortBy (comparing intersectionTime) intersections
-    -- use nearest for now
-    nearest = case sorted of
-        [] -> Nothing
-        (x:_) -> Just (intersectionShape x)
-    pixel = maybe bg (materialColor . shapeMaterial) nearest
+    pixel = computeShading sorted
+
+    computeShading [] = bg
+    computeShading (x:xs) = fg ^+^ bg
+      where
+        o = materialOpacity $ shapeMaterial $ intersectionShape x
+        fg = o *^ computeShading' x
+        bg = (1-o) *^ computeShading xs
+
+    computeShading' = materialColor . shapeMaterial . intersectionShape
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
 castRay :: Camera -> (Integer,Integer) -> Ray
@@ -121,17 +130,18 @@ renderImage :: String -> Scene -> Camera -> IO ()
 renderImage path scene camera = writePPM path imgSize pixelData
   where
     imgSize = cameraResolution camera
-    pixelData = renderScene scene camera
+    pixelData = map castPixel (renderScene scene camera)
+    castPixel (r,g,b) = (round r, round g, round b)
 
 main :: IO ()
 main = renderImage "out.ppm" scene camera
   where
     -- A plane that functions as the floor of the scene.
     shape = Shape material plane
-    material = Material (125,171,37) 0.5
+    material = Material (0,255,0) 0.5
     plane = Plane $ Ray (0,-1,0) $ normalize (0,1,0)
     shape' = Shape material' plane'
-    material' = Material (135,206,235) 0.5
+    material' = Material (255,0,0) 1
     plane' = Plane $ Ray (0,0,-1) $ normalize (0,0,1)
     scene = Scene { sceneBackground = (0,0,0)
                   , sceneShapes     = [shape, shape']
