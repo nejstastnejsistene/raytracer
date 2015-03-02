@@ -68,15 +68,31 @@ evaluateRay (Ray origin direction) t = origin ^+^ direction ^* t
 
 -- Calculate where along the ray (if at all) it intersects a shape.
 intersect :: Ray -> Shape -> Maybe Intersection
-intersect (Ray p v) s@(Shape m geo) = case geo of
-    Plane r@(Ray off n) -> case hit of
-        True -> Just (Intersection r t s)
-        False -> Nothing
+intersect r s@(Shape m geo) = case intersect' r geo of
+    Just t -> Just (Intersection r t s)
+    Nothing -> Nothing
+
+intersect' :: Ray -> Geometry -> Maybe Float
+intersect' r@(Ray p v) geo = case geo of
+    Plane (Ray off n) -> if hit then Just t else Nothing
       where
         cos = v <.> n
         t = ((off ^-^ p) <.> n) / cos
         hit = abs cos > epsilon && t > -epsilon
-    Triangle p1 p2 p3 -> undefined
+    Triangle p1 p2 p3 -> case intersect' r (Plane (Ray p1 n)) of
+        Nothing -> Nothing
+        Just t -> if hit then Just t else Nothing
+          where
+            q = evaluateRay r t
+            area = (e1 `cross3` e2) <.> n
+            a = (p2^-^q) `cross3` (p3^-^q) <.> n
+            b = (p3^-^q) `cross3` (p1^-^q) <.> n
+            g = (p1^-^q) `cross3` (p2^-^q) <.> n
+            hit = a > -epsilon && b > -epsilon && g > -epsilon
+      where
+        e1 = p2 ^-^ p1
+        e2 = p3 ^-^ p1
+        n = normalize (e1 `cross3` e2)
 
 normalVector :: Geometry -> Vector
 normalVector (Plane n) = rayDirection n
@@ -143,8 +159,11 @@ main = renderImage "out.ppm" scene camera
     shape' = Shape material' plane'
     material' = Material (255,0,0) 1
     plane' = Plane $ Ray (0,0,-1) $ normalize (0,0,1)
+    shape'' = Shape material'' triangle
+    material'' = Material (0,0,255) 1
+    triangle = Triangle (0,-1,-1) (5,-1,1) (5,1,-1)
     scene = Scene { sceneBackground = (0,0,0)
-                  , sceneShapes     = [shape, shape']
+                  , sceneShapes     = [shape, shape', shape'']
                   }
     -- Camera POV is behind the YZ-plane, with the Z-axis as up.
     camera = Camera { cameraPointOfView  = Ray (-1,0,0) (1,0,0)
