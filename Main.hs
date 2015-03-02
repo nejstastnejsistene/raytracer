@@ -66,45 +66,43 @@ normalize v = v ^/ magnitude v
 evaluateRay :: Ray -> Float -> Vector
 evaluateRay (Ray origin direction) t = origin ^+^ direction ^* t
 
--- Calculate where along the ray (if at all) it intersects a shape.
-intersect :: Ray -> Shape -> Maybe Intersection
-intersect r s@(Shape m geo) = case intersect' r geo of
+-- Determine the normal vector of a surface.
+normalVector :: Geometry -> Vector
+normalVector (Plane n) = rayDirection n
+normalVector (Triangle p1 p2 p3) = normalize $ (p2 ^-^ p1) `cross3` (p3 ^-^ p1)
+
+
+intersect :: Ray -> [Shape] -> [Intersection]
+intersect r shapes = sortBy (comparing intersectionTime) intersections
+  where intersections = mapMaybe (intersect' r) shapes
+
+intersect' :: Ray -> Shape -> Maybe Intersection
+intersect' r s@(Shape m geo) = case intersect'' r geo of
     Just t -> Just (Intersection r t s)
     Nothing -> Nothing
 
-intersect' :: Ray -> Geometry -> Maybe Float
-intersect' r@(Ray p v) geo = case geo of
-    Plane (Ray off n) -> if hit then Just t else Nothing
+intersect'' :: Ray -> Geometry -> Maybe Float
+intersect'' r@(Ray p v) geo = case geo of
+    Plane (Ray off _) -> if hit then Just t else Nothing
       where
         cos = v <.> n
         t = ((off ^-^ p) <.> n) / cos
         hit = abs cos > epsilon && t > -epsilon
-    Triangle p1 p2 p3 -> case intersect' r (Plane (Ray p1 n)) of
+    Triangle p1 p2 p3 -> case intersect'' r (Plane (Ray p1 n)) of
         Nothing -> Nothing
         Just t -> if hit then Just t else Nothing
           where
             q = evaluateRay r t
-            area = (e1 `cross3` e2) <.> n
             a = (p2^-^q) `cross3` (p3^-^q) <.> n
             b = (p3^-^q) `cross3` (p1^-^q) <.> n
             g = (p1^-^q) `cross3` (p2^-^q) <.> n
             hit = a > -epsilon && b > -epsilon && g > -epsilon
-      where
-        e1 = p2 ^-^ p1
-        e2 = p3 ^-^ p1
-        n = normalize (e1 `cross3` e2)
-
-normalVector :: Geometry -> Vector
-normalVector (Plane n) = rayDirection n
-normalVector (Triangle p1 p2 p3) = undefined
+  where
+    n = normalVector geo
 
 traceRay :: Scene -> Ray -> Pixel
-traceRay s@(Scene bg shapes) r@(Ray p v) = pixel
+traceRay s@(Scene bg shapes) r = computeShading (intersect r shapes)
   where
-    intersections = mapMaybe (intersect r) shapes
-    sorted = sortBy (comparing intersectionTime) intersections
-    pixel = computeShading sorted
-
     computeShading [] = bg
     computeShading (x:xs) = fg ^+^ bg
       where
@@ -112,7 +110,20 @@ traceRay s@(Scene bg shapes) r@(Ray p v) = pixel
         fg = o *^ computeShading' x
         bg = (1-o) *^ computeShading xs
 
-    computeShading' = materialColor . shapeMaterial . intersectionShape
+    computeShading' i = (diffuse ^+^ specular) ^* intensity
+      where
+        light = normalize ((1,1,1) ^-^ ip)
+        lightIntensity = 1
+        ip = evaluateRay (intersectionRay i) (intersectionTime i)
+        color = materialColor $ shapeMaterial $ intersectionShape i
+        geo = shapeGeometry (intersectionShape i)
+
+        diffuse = color ^* (normalVector geo <.> light)
+        specular = (0,0,0)
+
+        opacity = materialOpacity . shapeMaterial . intersectionShape
+        opacities = map opacity (intersect (Ray ip light) shapes)
+        intensity = foldl (*) lightIntensity opacities
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
 castRay :: Camera -> (Integer,Integer) -> Ray
@@ -152,23 +163,24 @@ renderImage path scene camera = writePPM path imgSize pixelData
 main :: IO ()
 main = renderImage "out.ppm" scene camera
   where
-    -- A plane that functions as the floor of the scene.
     shape = Shape material plane
-    material = Material (0,255,0) 0.5
-    plane = Plane $ Ray (0,-1,0) $ normalize (0,1,0)
+    material = Material (0,255,0) 1
+    plane = Plane $ Ray (0,-5,0) $ normalize (0,1,0)
     shape' = Shape material' plane'
     material' = Material (255,0,0) 1
     plane' = Plane $ Ray (0,0,-1) $ normalize (0,0,1)
     shape'' = Shape material'' triangle
-    material'' = Material (0,0,255) 1
-    triangle = Triangle (0,-1,-1) (5,-1,1) (5,1,-1)
+    material'' = Material (0,0,255) 0.5
+    triangle  = Triangle (0,-1,-1) (5,-1,1) (5,1,-1)
+    triangle' = Triangle (0,-1,-1) (5,-1,1) (5,-5,1)
+    shape''' = Shape material'' triangle'
     scene = Scene { sceneBackground = (0,0,0)
-                  , sceneShapes     = [shape, shape', shape'']
+                  , sceneShapes     = [shape, shape', shape'', shape''']
                   }
     -- Camera POV is behind the YZ-plane, with the Z-axis as up.
     camera = Camera { cameraPointOfView  = Ray (-1,0,0) (1,0,0)
                     , cameraUpDirection  = (0,0,1)
                     , cameraFocalLength  = 1
                     , cameraViewPortSize = (2,2)
-                    , cameraResolution   = (200,200)
+                    , cameraResolution   = (1000,1000)
                     }
