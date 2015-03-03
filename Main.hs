@@ -27,7 +27,6 @@ data Shape = Shape
 
 data Material = Material
     { materialColor   :: Pixel
-    , materialOpacity :: Float
     }
 
 data Geometry = Plane Ray
@@ -104,26 +103,20 @@ traceRay :: Scene -> Ray -> Pixel
 traceRay s@(Scene bg shapes) r = computeShading (intersect r shapes)
   where
     computeShading [] = bg
-    computeShading (x:xs) = fg ^+^ bg
+    computeShading (Intersection _ t (Shape m g):_) = (diffuse ^+^ specular) ^* intensity
       where
-        o = materialOpacity $ shapeMaterial $ intersectionShape x
-        fg = o *^ computeShading' x
-        bg = (1-o) *^ computeShading xs
-
-    computeShading' i = (diffuse ^+^ specular) ^* intensity
-      where
-        light = normalize ((1,1,1) ^-^ ip)
+        light = (0,0,0) ^-^ normalize (1,-1,-1)
         lightIntensity = 1
-        ip = evaluateRay (intersectionRay i) (intersectionTime i)
-        color = materialColor $ shapeMaterial $ intersectionShape i
-        geo = shapeGeometry (intersectionShape i)
 
-        diffuse = color ^* (normalVector geo <.> light)
+        ip = evaluateRay r t
+        diffuse = materialColor m ^* (normalVector g <.> light)
         specular = (0,0,0)
 
-        opacity = materialOpacity . shapeMaterial . intersectionShape
-        opacities = map opacity (intersect (Ray ip light) shapes)
-        intensity = foldl (*) lightIntensity opacities
+        ip' = evaluateRay (Ray ip light) (2 * epsilon)
+        shadowRay = Ray ip' light
+        intensity = case intersect shadowRay shapes of
+            [] -> lightIntensity
+            _  -> 0
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
 castRay :: Camera -> (Integer,Integer) -> Ray
@@ -163,24 +156,18 @@ renderImage path scene camera = writePPM path imgSize pixelData
 main :: IO ()
 main = renderImage "out.ppm" scene camera
   where
-    shape = Shape material plane
-    material = Material (0,255,0) 1
-    plane = Plane $ Ray (0,-5,0) $ normalize (0,1,0)
-    shape' = Shape material' plane'
-    material' = Material (255,0,0) 1
-    plane' = Plane $ Ray (0,0,-1) $ normalize (0,0,1)
-    shape'' = Shape material'' triangle
-    material'' = Material (0,0,255) 0.5
-    triangle  = Triangle (0,-1,-1) (5,-1,1) (5,1,-1)
-    triangle' = Triangle (0,-1,-1) (5,-1,1) (5,-5,1)
-    shape''' = Shape material'' triangle'
+    ground = Shape (Material (255,255,255)) $ Plane $ Ray (0,0,-1) (0,0,1)
+    triangles = do
+        y <- map (/3) [0..3.0]
+        let m = Material (255,0,0)
+        return $ Shape m $ Triangle (2,2-2*y,-1) (1,1-3*y,-1) (1.5,1.5-2*y,1)
     scene = Scene { sceneBackground = (0,0,0)
-                  , sceneShapes     = [shape, shape', shape'', shape''']
+                  , sceneShapes     = ground : triangles
                   }
     -- Camera POV is behind the YZ-plane, with the Z-axis as up.
     camera = Camera { cameraPointOfView  = Ray (-1,0,0) (1,0,0)
                     , cameraUpDirection  = (0,0,1)
                     , cameraFocalLength  = 1
-                    , cameraViewPortSize = (2,2)
+                    , cameraViewPortSize = (2.1,2.1)
                     , cameraResolution   = (1000,1000)
                     }
