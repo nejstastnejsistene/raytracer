@@ -28,7 +28,7 @@ data Shape = Shape
 
 data Material = Material
     { materialColor          :: Pixel
-    , materialSharpness      :: Integer
+    , materialSharpness      :: Maybe Integer
     , materialReflectiveness :: Float
     }
 
@@ -46,8 +46,11 @@ data Intersection = Intersection
 data Scene = Scene
     { sceneBackground   :: Pixel
     , sceneAmbientLight :: Float
+    , sceneLightSources :: [LightSource]
     , sceneShapes       :: [Shape]
     }
+
+data LightSource = DirectionalLight Float Vector
 
 data Camera = Camera
             { cameraPointOfView  :: Ray
@@ -69,6 +72,9 @@ normalize v = v ^/ magnitude v
 -- Evaluate the point at distance t from the ray's origin.
 evaluateRay :: Ray -> Float -> Vector
 evaluateRay (Ray origin direction) t = origin + direction ^* t
+
+moveRay :: Ray -> Float -> Ray
+moveRay r@(Ray _ direction) t = Ray (evaluateRay r t) direction
 
 -- Determine the normal vector of a surface at a point.
 normalVector :: Geometry -> Vector -> Vector
@@ -110,32 +116,35 @@ intersect'' r@(Ray p v) g = case g of
 
 traceRay :: Scene -> Ray -> Integer -> Pixel
 traceRay s r 0 = (0,0,0)
-traceRay s@(Scene bg ambient shapes) r depth = computeShading (intersect r shapes)
+traceRay s@(Scene bg ambient lights shapes) r depth = computeShading (intersect r shapes)
   where
     computeShading [] = bg
-    computeShading (Intersection _ t s':_) = ambient*^(1,1,1) + total
+    computeShading (Intersection _ t s':_) = ambient*^(1,1,1) + illumination
       where
-        light = normalize (-0.5,-1,1)
-        lightIntensity = 1
-
+        illumination = sum (map calcShade lights) ^/ fromIntegral (length lights)
         Material color sharpness ref = shapeMaterial s'
         ip = evaluateRay r t
-        n = normalize $ normalVector (shapeGeometry s') ip
-        diffuse = color ^* (n <.> light)
+        calcShade (DirectionalLight intensity direction) = shade
+          where
+            l = normalize (-direction) -- light starting at intersection point
+            n = normalize $ normalVector (shapeGeometry s') ip -- normal vector
+            diffuse = color ^* (n <.> l)
+            v = - normalize (rayDirection r) -- incident ray
+            r' = calcReflection n l
+            specular = maybe (0,0,0) (\s -> (1,1,1) ^* (v <.> r') ^ s) sharpness
+            -- The light ray moved forward so it doesn't cast shadows on itself.
+            shadowRay = moveRay (Ray ip l) (10 * epsilon)
+            -- See if the light is blocked by anything.
+            i = case intersect shadowRay shapes of
+                [] -> intensity
+                _  -> 0 -- shadow
+            -- Reflected viewing ray.
+            reflection = calcReflection n v
+            r'' = moveRay (Ray ip reflection) (10 * epsilon)
+            recursive = traceRay s r'' (depth - 1) -- reflected light
+            shade = i *^ (1-ref) *^ (diffuse + specular) + ref *^ recursive
+        calcReflection n r = normalize $ 2 *^ (n <.> r) *^ n - r
 
-        v = - normalize (rayDirection r)
-        r' = normalize ((2 *^ (n <.> light) *^ n) - light)
-        specular = case sharpness of
-            0 -> (0,0,0)
-            _ -> (1,1,1) ^* (v <.> r')^sharpness
-        recursive = traceRay s (Ray (evaluateRay (Ray ip r') (10*epsilon)) r') (depth - 1)
-        total = intensity *^ (1-ref) *^ (diffuse + specular) + ref *^ recursive
-
-        ip' = evaluateRay (Ray ip light) (10 * epsilon)
-        shadowRay = Ray ip' light
-        intensity = case intersect shadowRay shapes of
-            [] -> lightIntensity
-            _  -> ambient
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
 castRay :: Camera -> (Float,Float) -> Ray
@@ -165,7 +174,7 @@ renderScene scene camera gen = do
                          (dy,_) = randomR (0,1) gen
                          x' = fromIntegral x + dx - 0.5
                          y' = fromIntegral y + dy - 0.5
-                     return $ traceRay scene (castRay camera (x',y')) 3
+                     return $ traceRay scene (castRay camera (x',y')) 5
     return $ (sum samples) ^/ (fromIntegral $ length samples)
 
 -- Output a scene from a camera into a ppm file.
@@ -185,21 +194,34 @@ renderImage path scene camera = render >>= writePPM path imgSize
 main :: IO ()
 main = renderImage "out.ppm" scene camera
   where
-    scene = Scene (0.9,1,1) 0 (redBall : mirrorBall : chessBoard)
-    redBall = Shape (Material(1,0,0) 0 0) $ Sphere (2,5,0.5) 0.5
-    mirrorBall = Shape (Material (1,1,1) 0 0.99) $ Sphere (4,5,2) 1.5
+    scene = Scene { sceneBackground = (0.9,1,1)
+                  , sceneAmbientLight = 0
+                  , sceneLightSources = [ DirectionalLight 1 (1,1,-1)
+                                        , DirectionalLight 1 (0,1,-1) ]
+                  , sceneShapes = (redBall : mirrorBall : chessBoard)
+                  }
+    -- Small red ball.
+    redBall = Shape m $ Sphere (2,5,0.5) 0.5
+      where m = Material (1,0,0) Nothing 0
+    -- Highly reflective black ball.
+    mirrorBall = Shape m $ Sphere (4,5,2) 1.5
+      where m = Material (0,0,0) (Just 100) 0.9
+    -- An 8x8, highly specular and partly reflective checkered board.
     chessBoard = concat $ do
         xi <- [0..7]
         yi <- [0..7]
-        let m = Material (if even xi /= even yi then (0.87,0.75,0.51) else (0.62,0.44,0.10)) 100 0.2
+        let c = if even xi /= even yi then (0.87,0.75,0.51) else (0.62,0.44,0.10)
+            m = Material c (Just 10) 0.2
             x = fromIntegral xi
             y = fromIntegral yi
             t1 = Triangle (x,y,0) (x+1,y,0) (x,y+1,0)
             t2 = Triangle (x+1,y+1,0) (x,y+1,0) (x+1,y,0)
         return [Shape m t1, Shape m t2]
+    -- Camera is pointed above center of chess board from off to the side..
     cameraFocus = (4,4,1)
     cameraPos = (1,-2,3)
     cameraDir@(dx,dy,_) = normalize $ cameraFocus - cameraPos
+    -- Cross with left vector to get up vector.
     cameraUp = normalize $ cameraDir `cross3` (-dy,dx,0)
     camera = Camera { cameraPointOfView  = Ray cameraPos cameraDir
                     , cameraUpDirection  = cameraUp
