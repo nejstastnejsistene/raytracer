@@ -6,10 +6,6 @@ import Data.Maybe
 import Data.Ord
 import Data.VectorSpace
 import Data.Word
-import System.Random
-
-import Debug.Trace
-traceShowId a = trace (show a) a
 
 epsilon :: Float
 epsilon = 10e-6
@@ -42,7 +38,6 @@ data Intersection = Intersection
     , intersectionShape :: Shape
     }
 
-
 data Scene = Scene
     { sceneBackground   :: Pixel
     , sceneAmbientLight :: Float
@@ -73,6 +68,7 @@ normalize v = v ^/ magnitude v
 evaluateRay :: Ray -> Float -> Vector
 evaluateRay (Ray origin direction) t = origin + direction ^* t
 
+-- Move a ray forward by a given amount.
 moveRay :: Ray -> Float -> Ray
 moveRay r@(Ray _ direction) t = Ray (evaluateRay r t) direction
 
@@ -82,13 +78,16 @@ normalVector (Plane n)           _ = normalize $ rayDirection n
 normalVector (Triangle p1 p2 p3) _ = normalize $ (p2 - p1) `cross3` (p3 - p1)
 normalVector (Sphere center _)   p = normalize (p - center)
 
+-- Find all intersection of a ray and a list of shapes.
 intersect :: Ray -> [Shape] -> [Intersection]
 intersect r shapes = sortBy (comparing intersectionTime) intersections
   where intersections = concatMap (intersect' r) shapes
 
+-- Intersection a ray with a single shape.
 intersect' :: Ray -> Shape -> [Intersection]
 intersect' r s@(Shape m g) = [ Intersection r t s | t <- intersect'' r g ]
 
+-- Calculate the time at which a ray intersects a geometry.
 intersect'' :: Ray -> Geometry -> [Float]
 intersect'' r@(Ray p v) g = case g of
     Plane (Ray off n) -> if hit then [t] else []
@@ -111,12 +110,18 @@ intersect'' r@(Ray p v) g = case g of
         l = center - p -- Vector torwards the center.
         tMid = l <.> v -- Distance to nearest point on ray the center.
         d2 = l <.> l - tMid * tMid -- Distance from ray to center squared.
-        r2 = radius * radius
-        dt = sqrt (r2 - d2)
+        r2 = radius * radius -- Radius squared.
+        dt = sqrt (r2 - d2) -- Distance from closest point on ray to sphere edge.
 
-traceRay :: Scene -> Ray -> Integer -> Pixel
-traceRay s r 0 = (0,0,0)
-traceRay s@(Scene bg ambient lights shapes) r depth = computeShading (intersect r shapes)
+-- Trace a ray with default recursion depth.
+traceRay :: Scene -> Ray -> Pixel
+traceRay s r = traceRay' s r recursionDepth
+  where recursionDepth = 5
+
+-- Trace a ray with a specified recursion depth.
+traceRay' :: Scene -> Ray -> Integer -> Pixel
+traceRay' s r 0 = (0,0,0)
+traceRay' s@(Scene bg ambient lights shapes) r depth = computeShading (intersect r shapes)
   where
     computeShading [] = bg
     computeShading (Intersection _ t s':_) = ambient*^(1,1,1) + illumination
@@ -126,28 +131,30 @@ traceRay s@(Scene bg ambient lights shapes) r depth = computeShading (intersect 
         ip = evaluateRay r t
         calcShade (DirectionalLight intensity direction) = shade
           where
-            l = normalize (-direction) -- light starting at intersection point
-            n = normalize $ normalVector (shapeGeometry s') ip -- normal vector
-            diffuse = color ^* (n <.> l)
-            v = - normalize (rayDirection r) -- incident ray
+            l = normalize (-direction) -- Light starting at intersection point.
+            n = normalize $ normalVector (shapeGeometry s') ip -- Normal vector.
+            diffuse = color ^* (n `dotMin` l)
+            v = - normalize (rayDirection r) -- Incident ray.
             r' = calcReflection n l
-            specular = maybe (0,0,0) (\s -> (1,1,1) ^* (v <.> r') ^ s) sharpness
+            specular = maybe (0,0,0) (\s -> (1,1,1) ^* (v `dotMin` r') ^ s) sharpness
             -- The light ray moved forward so it doesn't cast shadows on itself.
             shadowRay = moveRay (Ray ip l) (10 * epsilon)
-            -- See if the light is blocked by anything.
+            -- See if the light is blocked by anything, for shadows.
             i = case intersect shadowRay shapes of
                 [] -> intensity
-                _  -> 0 -- shadow
+                _  -> 0
             -- Reflected viewing ray.
             reflection = calcReflection n v
             r'' = moveRay (Ray ip reflection) (10 * epsilon)
-            recursive = traceRay s r'' (depth - 1) -- reflected light
+            recursive = traceRay' s r'' (depth - 1) -- Reflected image.
             shade = i *^ (1-ref) *^ (diffuse + specular) + ref *^ recursive
-        calcReflection n r = normalize $ 2 *^ (n <.> r) *^ n - r
-
+        -- Calculate the reflection of a ray about the normal vector.
+        calcReflection n r = normalize $ 2 *^ (n `dotMin` r) *^ n - r
+        -- Dot product that gets clamped at 0.
+        dotMin x y = max 0 (x <.> y)
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
-castRay :: Camera -> (Float,Float) -> Ray
+castRay :: Camera -> (Integer,Integer) -> Ray
 castRay (Camera pov@(Ray p v) up fl (vw,vh) (imgW,imgH)) (x,y) = ray
   where
     -- Center of view port and right vector.
@@ -157,34 +164,26 @@ castRay (Camera pov@(Ray p v) up fl (vw,vh) (imgW,imgH)) (x,y) = ray
     pixelWidth = vw / fromIntegral imgW
     pixelHeight = vh / fromIntegral imgH
     -- Offsets from center of view port.
-    hOff = (x + 0.5) * pixelWidth - vw / 2
-    vOff = (y + 0.5) * pixelWidth - vh / 2
+    hOff = (fromIntegral x + 0.5) * pixelWidth - vw / 2
+    vOff = (fromIntegral y + 0.5) * pixelWidth - vh / 2
     -- Point in view port through which to cast the ray.
     p' = center - up^*vOff + right^*hOff
     ray = Ray p $ normalize (p' - p)
 
 -- Render a scene from a camera into an array of pixels.
-renderScene :: Scene -> Camera -> StdGen -> [Pixel]
-renderScene scene camera gen = do
+renderScene :: Scene -> Camera -> [Pixel]
+renderScene scene camera = do
     let (w,h) = cameraResolution camera
     y <- [0..h-1]
     x <- [0..w-1]
-    let samples = do i <- [0..100]
-                     let (dx,_) = randomR (0,1) gen
-                         (dy,_) = randomR (0,1) gen
-                         x' = fromIntegral x + dx - 0.5
-                         y' = fromIntegral y + dy - 0.5
-                     return $ traceRay scene (castRay camera (x',y')) 5
-    return $ (sum samples) ^/ (fromIntegral $ length samples)
+    return $ traceRay scene (castRay camera (x,y))
 
 -- Output a scene from a camera into a ppm file.
 renderImage :: String -> Scene -> Camera -> IO ()
-renderImage path scene camera = render >>= writePPM path imgSize
+renderImage path scene camera = writePPM path imgSize pixelData
   where
     imgSize = cameraResolution camera
-    render = do
-        gen <- getStdGen
-        return $ fmap castPixel (renderScene scene camera gen)
+    pixelData = map castPixel (renderScene scene camera)
     castPixel (r,g,b) = (cast r, cast g, cast b)
     cast = round . (255*) . clip
     clip x | x < 0 = 0
