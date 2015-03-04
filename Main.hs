@@ -6,10 +6,10 @@ import Data.Maybe
 import Data.Ord
 import Data.VectorSpace
 import Data.Word
+import System.Random
 
 import Debug.Trace
 traceShowId a = trace (show a) a
-
 
 epsilon :: Float
 epsilon = 10e-6
@@ -138,7 +138,7 @@ traceRay s@(Scene bg ambient shapes) r depth = computeShading (intersect r shape
             _  -> ambient
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
-castRay :: Camera -> (Integer,Integer) -> Ray
+castRay :: Camera -> (Float,Float) -> Ray
 castRay (Camera pov@(Ray p v) up fl (vw,vh) (imgW,imgH)) (x,y) = ray
   where
     -- Center of view port and right vector.
@@ -148,26 +148,34 @@ castRay (Camera pov@(Ray p v) up fl (vw,vh) (imgW,imgH)) (x,y) = ray
     pixelWidth = vw / fromIntegral imgW
     pixelHeight = vh / fromIntegral imgH
     -- Offsets from center of view port.
-    hOff = (fromIntegral x + 0.5) * pixelWidth - vw / 2
-    vOff = (fromIntegral y + 0.5) * pixelWidth - vh / 2
+    hOff = (x + 0.5) * pixelWidth - vw / 2
+    vOff = (y + 0.5) * pixelWidth - vh / 2
     -- Point in view port through which to cast the ray.
     p' = center - up^*vOff + right^*hOff
     ray = Ray p $ normalize (p' - p)
 
 -- Render a scene from a camera into an array of pixels.
-renderScene :: Scene -> Camera -> [Pixel]
-renderScene scene camera = do
+renderScene :: Scene -> Camera -> StdGen -> [Pixel]
+renderScene scene camera gen = do
     let (w,h) = cameraResolution camera
     y <- [0..h-1]
     x <- [0..w-1]
-    return $ traceRay scene (castRay camera (x,y)) 4
+    let samples = do i <- [0..100]
+                     let (dx,_) = randomR (0,1) gen
+                         (dy,_) = randomR (0,1) gen
+                         x' = fromIntegral x + dx - 0.5
+                         y' = fromIntegral y + dy - 0.5
+                     return $ traceRay scene (castRay camera (x',y')) 3
+    return $ (sum samples) ^/ (fromIntegral $ length samples)
 
 -- Output a scene from a camera into a ppm file.
 renderImage :: String -> Scene -> Camera -> IO ()
-renderImage path scene camera = writePPM path imgSize pixelData
+renderImage path scene camera = render >>= writePPM path imgSize
   where
     imgSize = cameraResolution camera
-    pixelData = map castPixel (renderScene scene camera)
+    render = do
+        gen <- getStdGen
+        return $ fmap castPixel (renderScene scene camera gen)
     castPixel (r,g,b) = (cast r, cast g, cast b)
     cast = round . (255*) . clip
     clip x | x < 0 = 0
