@@ -27,8 +27,9 @@ data Shape = Shape
     }
 
 data Material = Material
-    { materialColor       :: Pixel
-    , materialSharpness   :: Integer
+    { materialColor          :: Pixel
+    , materialSharpness      :: Integer
+    , materialReflectiveness :: Float
     }
 
 data Geometry = Plane Ray
@@ -43,8 +44,9 @@ data Intersection = Intersection
 
 
 data Scene = Scene
-    { sceneBackground :: Pixel
-    , sceneShapes     :: [Shape]
+    { sceneBackground   :: Pixel
+    , sceneAmbientLight :: Float
+    , sceneShapes       :: [Shape]
     }
 
 data Camera = Camera
@@ -106,30 +108,34 @@ intersect'' r@(Ray p v) g = case g of
         r2 = radius * radius
         dt = sqrt (r2 - d2)
 
-traceRay :: Scene -> Ray -> Pixel
-traceRay s@(Scene bg shapes) r = computeShading (intersect r shapes)
+traceRay :: Scene -> Ray -> Integer -> Pixel
+traceRay s r 0 = (0,0,0)
+traceRay s@(Scene bg ambient shapes) r depth = computeShading (intersect r shapes)
   where
     computeShading [] = bg
-    computeShading (Intersection _ t s:_) = clamp (total ^* intensity)
+    computeShading (Intersection _ t s':_) = ambient*^(1,1,1) + total
       where
-        light = normalize (-1,0,1)
+        light = normalize (-0.5,-1,1)
         lightIntensity = 1
 
-        Material color sharpness = shapeMaterial s
+        Material color sharpness ref = shapeMaterial s'
         ip = evaluateRay r t
-        n = normalize $ normalVector (shapeGeometry s) ip
-        diffuse = clamp $ color ^* (max 0 (n <.> light))
+        n = normalize $ normalVector (shapeGeometry s') ip
+        diffuse = color ^* (n <.> light)
 
         v = - normalize (rayDirection r)
         r' = normalize ((2 *^ (n <.> light) *^ n) - light)
-        specular = (1,1,1) ^* (clamp' $ (v <.> r')^sharpness)
-        total = diffuse + specular
+        specular = case sharpness of
+            0 -> (0,0,0)
+            _ -> (1,1,1) ^* (v <.> r')^sharpness
+        recursive = traceRay s (Ray (evaluateRay (Ray ip r') (10*epsilon)) r') (depth - 1)
+        total = intensity *^ (1-ref) *^ (diffuse + specular) + ref *^ recursive
 
         ip' = evaluateRay (Ray ip light) (10 * epsilon)
         shadowRay = Ray ip' light
         intensity = case intersect shadowRay shapes of
             [] -> lightIntensity
-            _  -> 0
+            _  -> ambient
 
 -- Compute a ray from the camera that goes through the (x,y)th pixel.
 castRay :: Camera -> (Integer,Integer) -> Ray
@@ -154,7 +160,7 @@ renderScene scene camera = do
     let (w,h) = cameraResolution camera
     y <- [0..h-1]
     x <- [0..w-1]
-    return $ traceRay scene $ castRay camera (x,y)
+    return $ traceRay scene (castRay camera (x,y)) 4
 
 -- Output a scene from a camera into a ppm file.
 renderImage :: String -> Scene -> Camera -> IO ()
@@ -163,25 +169,21 @@ renderImage path scene camera = writePPM path imgSize pixelData
     imgSize = cameraResolution camera
     pixelData = map castPixel (renderScene scene camera)
     castPixel (r,g,b) = (cast r, cast g, cast b)
-    cast = round . (255*) . clamp'
-
-clamp :: Pixel -> Pixel
-clamp (r,g,b) = (clamp' r,clamp' g, clamp' b)
-
-clamp' :: Float -> Float
-clamp' x | x < 0 = 0
-         | x > 1 = 1
-         | otherwise = x
+    cast = round . (255*) . clip
+    clip x | x < 0 = 0
+           | x > 1 = 1
+           | otherwise = x
 
 main :: IO ()
 main = renderImage "out.ppm" scene camera
   where
-    scene = Scene (0.9,1,1) (mirrorBall : chessBoard)
-    mirrorBall = Shape (Material (1,1,1) 150) $ Sphere (4,5,2) 1.5
+    scene = Scene (0.9,1,1) 0 (redBall : mirrorBall : chessBoard)
+    redBall = Shape (Material(1,0,0) 0 0) $ Sphere (2,5,0.5) 0.5
+    mirrorBall = Shape (Material (1,1,1) 0 0.99) $ Sphere (4,5,2) 1.5
     chessBoard = concat $ do
         xi <- [0..7]
         yi <- [0..7]
-        let m = Material (if even xi /= even yi then (0.87,0.75,0.51) else (0.62,0.44,0.10)) 1
+        let m = Material (if even xi /= even yi then (0.87,0.75,0.51) else (0.62,0.44,0.10)) 100 0.2
             x = fromIntegral xi
             y = fromIntegral yi
             t1 = Triangle (x,y,0) (x+1,y,0) (x,y+1,0)
